@@ -244,13 +244,23 @@ def _error_response(status: int, message: str, etype: str, code: str | None = No
 # ---------------------------------------------------------------------
 def create_app(api_key: str | None = None, auto_pull: bool = True,
                request_timeout: int = 600) -> FastAPI:
+    
+    if not api_key:
+        raise ValueError("Api key is mandatory.")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.ollama = OllamaHandler()
         yield
 
-    app = FastAPI(title="Desktop Agent Server", version="2.0.0", lifespan=lifespan)
+    app = FastAPI(
+        title="Desktop Agent Server",
+        version="2.0.0",
+        lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
 
     # ---- error handlers (all in OpenAI's error format) ----
     @app.exception_handler(OllamaError)
@@ -285,7 +295,7 @@ def create_app(api_key: str | None = None, auto_pull: bool = True,
         return handler
 
     # ---- public ----
-    @app.get("/health")
+    @app.get("/health", dependencies=[Depends(require_key)])
     def health(request: Request):
         h: OllamaHandler = request.app.state.ollama
         return {"status": "ok", "ollama_installed": bool(h.ollama_exe),
