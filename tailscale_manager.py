@@ -17,8 +17,11 @@ INSTALLER_URL = (
 
 TAILSCALE_NETWORK = ipaddress.ip_network("100.64.0.0/10")
 
-EXPECTED_SIGNER_SUBJECT = "PUT_THE_VERIFIED_SUBJECT_HERE"
-
+EXPECTED_SIGNER_SUBJECT = (
+    "CN=Tailscale Inc., O=Tailscale Inc., L=Toronto, S=Ontario, "
+    "C=CA, SERIALNUMBER=1131559-5, OID.2.5.4.15=Private Organization, "
+    "OID.1.3.6.1.4.1.311.60.2.1.3=CA"
+)
 
 class TailscaleError(RuntimeError):
     pass
