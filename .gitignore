@@ -1,0 +1,9 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+build/
+dist/
+OllamaSetup.exe
+.env
+api_key.txt
