@@ -104,7 +104,6 @@ def main() -> None:
 
     print(f" Tailscale IP : {host}")
     print(f" Server URL   : http://{host}:{args.port}/v1")
-    print(f" API key      : {api_key}")
     print(" Authentication: ENABLED")
 
     print("=" * 55)

@@ -1,6 +1,7 @@
 
 """Tailscale installation and connectivity management for Windows."""
 
+import json
 import ipaddress
 import os
 import shutil
@@ -15,6 +16,8 @@ INSTALLER_URL = (
 )
 
 TAILSCALE_NETWORK = ipaddress.ip_network("100.64.0.0/10")
+
+EXPECTED_SIGNER_SUBJECT = "PUT_THE_VERIFIED_SUBJECT_HERE"
 
 
 class TailscaleError(RuntimeError):
@@ -43,9 +46,7 @@ def find_tailscale_cli() -> str | None:
     return None
 
 
-def verify_installer(path: Path) -> None:
-    """Verify the installer's Windows Authenticode signature."""
-
+def verify_installer(path: str | Path) -> None:
     escaped = str(path).replace("'", "''")
 
     script = (
@@ -53,30 +54,37 @@ def verify_installer(path: Path) -> None:
         'Write-Output "$($sig.Status)|$($sig.SignerCertificate.Subject)"'
     )
 
-    result = subprocess.run(
-        [
-            "powershell.exe",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            script,
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    try:
+        result = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                script,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise TailscaleError(
+            "Could not verify the Tailscale installer signature."
+        ) from exc
 
-    status, _, signer = result.stdout.strip().partition("|")
+    status, separator, signer = result.stdout.strip().partition("|")
 
     if (
         result.returncode != 0
+        or not separator
         or status != "Valid"
-        or "Tailscale" not in signer
+        or signer.strip() != EXPECTED_SIGNER_SUBJECT
     ):
         raise TailscaleError(
-            "Tailscale installer signature verification failed."
+            "Tailscale installer signature verification failed "
+            "or the publisher did not match."
         )
-
 
 def install_tailscale() -> None:
     """Download and launch the official Tailscale installer."""
@@ -138,8 +146,6 @@ def install_tailscale() -> None:
 
 
 def get_tailscale_ipv4() -> str:
-    """Get the connected device's Tailscale IPv4 address."""
-
     if os.name != "nt":
         raise TailscaleError(
             "This server currently supports Windows only."
@@ -150,35 +156,59 @@ def get_tailscale_ipv4() -> str:
     if not cli:
         raise TailscaleError("Tailscale is not installed.")
 
-    result = subprocess.run(
-        [cli, "ip", "-4"],
-        capture_output=True,
-        text=True,
-        timeout=15,
-    )
-
-    address = (
-        result.stdout.strip().splitlines()[0]
-        if result.stdout.strip()
-        else ""
-    )
-
-    if result.returncode != 0 or not address:
+    try:
+        result = subprocess.run(
+            [cli, "status", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
         raise TailscaleError(
-            "Tailscale is installed but not connected. "
-            "Please sign in and connect to your tailnet."
+            "Tailscale status check timed out."
+        ) from exc
+    except OSError as exc:
+        raise TailscaleError(
+            f"Could not execute Tailscale CLI: {exc}"
+        ) from exc
+
+    if result.returncode != 0:
+        raise TailscaleError(
+            f"Tailscale status command failed: {result.stderr.strip()}"
         )
 
     try:
-        parsed = ipaddress.ip_address(address)
-    except ValueError as exc:
+        status = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
         raise TailscaleError(
-            "Invalid Tailscale IP address."
+            "Tailscale returned invalid status data."
         ) from exc
 
-    if parsed.version != 4 or parsed not in TAILSCALE_NETWORK:
+    if status.get("BackendState") != "Running":
         raise TailscaleError(
-            "The returned address is not a valid Tailscale IPv4 address."
+            "Tailscale is not running. Please connect to your tailnet."
         )
 
-    return str(parsed)
+    self_node = status.get("Self") or {}
+
+    if not self_node.get("Online", False):
+        raise TailscaleError(
+            "This device is not online in Tailscale. "
+            "Please check your connection."
+        )
+
+    tailscale_ips = self_node.get("TailscaleIPs", [])
+
+    for address in tailscale_ips:
+        try:
+            parsed = ipaddress.ip_address(address)
+        except ValueError:
+            continue
+
+        if parsed.version == 4 and parsed in TAILSCALE_NETWORK:
+            return str(parsed)
+
+    raise TailscaleError(
+        "No valid Tailscale IPv4 address was found."
+    )
